@@ -16,8 +16,8 @@ from pauper_meta_reports import (
     parse_meta_report,
     update_deck_registry_from_goldfish,
 )
+from pauper_meta_reports.db import get_collection
 
-DATA_DIR = ROOT / "data"
 MESSAGES_FILE = ROOT / "discord_messages.txt"
 
 
@@ -38,11 +38,12 @@ def split_into_messages(text: str) -> list[str]:
 
 
 def main() -> None:
-    name_registry = NameRegistry(DATA_DIR / "names.json")
-    deck_registry = DeckRegistry(DATA_DIR / "decks.json")
+    # Separate "_demo" collections so running this against the sample messages
+    # never touches real league data sitting in the same MongoDB database.
+    name_registry = NameRegistry(get_collection("names_demo"))
+    deck_registry = DeckRegistry(get_collection("decks_demo"))
 
-    history_path = DATA_DIR / "history.json"
-    history = History.load(history_path)
+    history = History.load(get_collection("history_demo"))
     if history:
         print(f"Loaded history: {len(history)} report(s), {history.first_date} to {history.last_date}")
     else:
@@ -86,8 +87,7 @@ def main() -> None:
             name_ask=name_ask,
             deck_ask=deck_ask,
         )
-        history.add(report)
-        history.save(history_path)
+        history.add(report)  # persists to MongoDB immediately
         dummy_date += timedelta(weeks=1)
 
         print(f"--- message {i}: {len(report)} result(s) on {report.date} @ {report.event} ---")

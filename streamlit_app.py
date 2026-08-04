@@ -15,8 +15,6 @@ from streamlit.errors import StreamlitSecretNotFoundError
 
 from pauper_meta_reports import History, Record
 
-DATA_DIR = ROOT / "data"
-
 # --- Palette (project dataviz skill's validated default - see references/palette.md) ---
 CATEGORICAL = [
     "#2a78d6",  # blue
@@ -74,7 +72,7 @@ def _blue_colorscale() -> list[list[float | str]]:
 
 @st.cache_data
 def load_results() -> pd.DataFrame:
-    history = History.load(DATA_DIR / "history.json")
+    history = History.load()
     rows = []
     for report in history:
         for result in report:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import json
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 
+from pymongo.collection import Collection
 from rapidfuzz import fuzz, process
+
+from .db import get_collection
 
 # Signature for the interactive confirmation hook passed to resolve():
 #   ask(raw_text, candidate_canonical_or_None, score) -> answer
@@ -47,13 +49,17 @@ class AliasEntry:
     # later. Decks leave these blank.
     first: str = ""
     last: str = ""
+    # Stable identity for the Mongo document, independent of `canonical` -
+    # canonical can change (e.g. "Nolan" -> "Nolan S"), the underlying
+    # document must not, or a rename would leave an orphaned duplicate.
+    entry_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def all_names(self) -> list[str]:
         return [self.canonical, *self.aliases]
 
 
 class AliasRegistry:
-    """Canonical-entry + alias lookup, backed by a JSON file, with fuzzy fallback.
+    """Canonical-entry + alias lookup, backed by a MongoDB collection, with fuzzy fallback.
 
     Two read paths are exposed on purpose:
       - lookup(): read-only, used when disambiguating text (e.g. splitting a
@@ -64,12 +70,12 @@ class AliasRegistry:
 
     def __init__(
         self,
-        path: Path,
+        collection: Collection,
         fuzzy_threshold: float = 88.0,
         scorer=fuzz.WRatio,
         allow_skip: bool = True,
     ):
-        self.path = Path(path)
+        self.collection = collection
         self.fuzzy_threshold = fuzzy_threshold
         self.scorer = scorer
         # Whether a blank/Enter answer to `ask` means "skip, leave unresolved"
@@ -80,26 +86,34 @@ class AliasRegistry:
         self.entries: list[AliasEntry] = self._load()
 
     def _load(self) -> list[AliasEntry]:
-        if not self.path.exists():
-            return []
-        raw = json.loads(self.path.read_text())
         return [
             AliasEntry(
-                e["canonical"],
-                list(e.get("aliases", [])),
-                first=e.get("first", ""),
-                last=e.get("last", ""),
+                d["canonical"],
+                list(d.get("aliases", [])),
+                first=d.get("first", ""),
+                last=d.get("last", ""),
+                entry_id=d["_id"],
             )
-            for e in raw
+            for d in self.collection.find({})
         ]
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = [
-            {"canonical": e.canonical, "aliases": e.aliases, "first": e.first, "last": e.last}
-            for e in self.entries
-        ]
-        self.path.write_text(json.dumps(payload, indent=2))
+        """Upsert every entry by its stable entry_id. Called after every
+        mutation - at this scale (dozens of entries) rewriting all of them is
+        cheap, and per-document upserts mean there's never a window where a
+        crash mid-save could lose data, unlike a delete-then-reinsert."""
+        for entry in self.entries:
+            self.collection.replace_one(
+                {"_id": entry.entry_id},
+                {
+                    "_id": entry.entry_id,
+                    "canonical": entry.canonical,
+                    "aliases": entry.aliases,
+                    "first": entry.first,
+                    "last": entry.last,
+                },
+                upsert=True,
+            )
 
     def _candidates(self) -> dict[str, str]:
         lookup: dict[str, str] = {}
@@ -220,7 +234,7 @@ class AliasRegistry:
 
 
 class NameRegistry(AliasRegistry):
-    def __init__(self, path: Path | str = Path("data/names.json")):
+    def __init__(self, collection: Collection | None = None):
         # Plain (non-partial) ratio: WRatio's partial-match behavior treats
         # "John G" as a near-perfect match for "John", which silently merges
         # different people who share a first name. fuzzy_threshold only
@@ -228,7 +242,12 @@ class NameRegistry(AliasRegistry):
         # whenever a human is present, anything short of an exact match asks.
         # allow_skip=False: every result needs a player, so pressing Enter
         # adds a new person instead of leaving the result ownerless.
-        super().__init__(path, fuzzy_threshold=92.0, scorer=fuzz.ratio, allow_skip=False)
+        super().__init__(
+            collection if collection is not None else get_collection("names"),
+            fuzzy_threshold=92.0,
+            scorer=fuzz.ratio,
+            allow_skip=False,
+        )
 
     def _add_new(self, raw: str) -> str:
         """Add a new player, then re-derive display names for everyone who
@@ -279,14 +298,22 @@ class NameRegistry(AliasRegistry):
 
 
 class DeckRegistry(AliasRegistry):
-    def __init__(self, path: Path | str = Path("data/decks.json")):
+    def __init__(self, collection: Collection | None = None):
         # token_sort_ratio so word order doesn't matter ("red madness" vs "madness red").
-        super().__init__(path, fuzzy_threshold=82.0, scorer=fuzz.token_sort_ratio)
+        super().__init__(
+            collection if collection is not None else get_collection("decks"),
+            fuzzy_threshold=82.0,
+            scorer=fuzz.token_sort_ratio,
+        )
 
 
 class LGSRegistry(AliasRegistry):
-    def __init__(self, path: Path | str = Path("data/lgs.json")):
+    def __init__(self, collection: Collection | None = None):
         # Store names are proper nouns - two different LGSs getting merged would
         # corrupt event-level stats - so use the same conservative plain-ratio
         # scorer as NameRegistry rather than WRatio's eager partial matching.
-        super().__init__(path, fuzzy_threshold=90.0, scorer=fuzz.ratio)
+        super().__init__(
+            collection if collection is not None else get_collection("lgs"),
+            fuzzy_threshold=90.0,
+            scorer=fuzz.ratio,
+        )

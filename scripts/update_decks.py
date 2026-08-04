@@ -8,11 +8,9 @@ sys.path.insert(0, str(ROOT))
 
 from pauper_meta_reports import DeckRegistry, update_deck_registry_from_goldfish
 
-DATA_DIR = ROOT / "data"
-
 
 def main() -> None:
-    deck_registry = DeckRegistry(DATA_DIR / "decks.json")
+    deck_registry = DeckRegistry()
 
     print("Fetching deck list from MTGGoldfish...")
     added = update_deck_registry_from_goldfish(deck_registry)

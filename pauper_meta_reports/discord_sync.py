@@ -14,7 +14,6 @@ from .parser import find_lgs_in_message, is_meta_report, parse_meta_report, pars
 from .registry import DeckRegistry, LGSRegistry, NameRegistry
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
 SETTINGS_PATH = ROOT / "settings.json"
 
 
@@ -51,11 +50,10 @@ def run_sync() -> None:
     default_lgs = settings["DEFAULT_LGS"]
     start_date = datetime.fromisoformat(settings["START_DATE"]).replace(tzinfo=timezone.utc)
 
-    name_registry = NameRegistry(DATA_DIR / "names.json")
-    deck_registry = DeckRegistry(DATA_DIR / "decks.json")
-    lgs_registry = LGSRegistry(DATA_DIR / "lgs.json")
-    history_path = DATA_DIR / "history.json"
-    history = History.load(history_path)
+    name_registry = NameRegistry()
+    deck_registry = DeckRegistry()
+    lgs_registry = LGSRegistry()
+    history = History.load()
 
     # Re-scan from the last known report's own date (not the day after) so a
     # second same-day report isn't missed; History.has_report() skips anything
@@ -106,8 +104,7 @@ def run_sync() -> None:
                     name_ask=None,
                     deck_ask=None,
                 )
-                if history.add(report):
-                    history.save(history_path)
+                if history.add(report):  # add() persists to MongoDB immediately
                     new_reports += 1
                     print(f"  {report_date}: recorded {len(report)} result(s)")
 

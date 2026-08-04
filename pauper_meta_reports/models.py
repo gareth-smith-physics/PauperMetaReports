@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import date as date_
-from pathlib import Path
+
+from pymongo.collection import Collection
+
+from .db import get_collection
 
 RECORD_RE = re.compile(r"(?<!\d)([0-3])-([0-3])(?:-([0-3]))?(?!\d)")
 
@@ -115,11 +117,20 @@ class MetaReport:
         )
 
 
+def _report_doc(report: MetaReport) -> dict:
+    doc = report.to_dict()
+    # (date, event) is already the application-level uniqueness key
+    # (has_report()); using it as the Mongo _id makes that a DB-level
+    # guarantee too, and makes re-syncing the same report an idempotent upsert.
+    doc["_id"] = f"{doc['date']}::{doc['event']}"
+    return doc
+
+
 @dataclass
 class History:
-    """The accumulated set of meta reports already parsed, persisted to disk
-    so a future run can tell which reports it's already analyzed and skip
-    them instead of reprocessing the same Discord messages.
+    """The accumulated set of meta reports already parsed, persisted to
+    MongoDB so a future run can tell which reports it's already analyzed and
+    skip them instead of reprocessing the same Discord messages.
     """
 
     reports: list[MetaReport] = field(default_factory=list)
@@ -139,11 +150,16 @@ class History:
         """Record a report unless one for this date+event is already known.
 
         Returns True if it was added, False if it was a repeat - callers can
-        use this to skip re-analyzing a meta report they've already seen.
+        use this to skip re-analyzing a meta report they've already seen. If
+        this History came from load(), the new report is persisted immediately.
         """
         if self.has_report(report.date, report.event):
             return False
         self.reports.append(report)
+        collection = getattr(self, "_collection", None)
+        if collection is not None:
+            doc = _report_doc(report)
+            collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return True
 
     def __iter__(self):
@@ -152,21 +168,20 @@ class History:
     def __len__(self) -> int:
         return len(self.reports)
 
-    def to_dict(self) -> dict:
-        return {"reports": [r.to_dict() for r in self.reports]}
-
     @classmethod
-    def from_dict(cls, data: dict) -> "History":
-        return cls(reports=[MetaReport.from_dict(r) for r in data.get("reports", [])])
+    def load(cls, collection: Collection | None = None) -> "History":
+        collection = collection if collection is not None else get_collection("history")
+        reports = [MetaReport.from_dict(d) for d in collection.find({})]
+        history = cls(reports=reports)
+        history._collection = collection
+        return history
 
-    @classmethod
-    def load(cls, path: Path | str) -> "History":
-        path = Path(path)
-        if not path.exists():
-            return cls()
-        return cls.from_dict(json.loads(path.read_text()))
-
-    def save(self, path: Path | str) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2))
+    def save(self, collection: Collection | None = None) -> None:
+        """Bulk-upsert every report. Only needed for one-off imports/migrations -
+        normal incremental use persists automatically via add()."""
+        collection = collection if collection is not None else getattr(self, "_collection", None)
+        if collection is None:
+            raise ValueError("No collection to save to - pass one, or call load() first.")
+        for report in self.reports:
+            doc = _report_doc(report)
+            collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
