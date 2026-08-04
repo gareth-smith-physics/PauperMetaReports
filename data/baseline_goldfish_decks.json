@@ -1,0 +1,356 @@
+[
+  {
+    "canonical": "Mono Red Madness",
+    "aliases": ["R Madness", "Mono R Madness", "Red Madness"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Blue Terror",
+    "aliases": ["U Terror", "Mono U Terror", "Mono Blue Terror"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Grixis Affinity",
+    "aliases": ["Affinity"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Jund Wildfire",
+    "aliases": ["Wildfire", "Jund"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Tron",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Mono Red Rally",
+    "aliases": ["Rally", "Mono R Rally", "Red Rally"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Snacker Gates",
+    "aliases": ["Gates"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Elves",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Dimir Faeries",
+    "aliases": ["UB Faeries", "Faeries"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Spy Combo",
+    "aliases": ["Spy"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Jeskai Ephemerate",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Gruul Ponza",
+    "aliases": ["Ponza"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "White Aggro",
+    "aliases": ["White Weenies", "Weenies", "Mono White"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Rakdos Madness",
+    "aliases": ["BR Madness", "RB Madness"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Golgari Gardens",
+    "aliases": ["Gardens"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Familiars",
+    "aliases": ["Fams", "UW Familiars"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Mono-Blue Faeries",
+    "aliases": ["Mono Blue Faeries", "U Faeries", "Mono U Faeries"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Ruby Storm",
+    "aliases": ["Ruby"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Bogles",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Black Sacrifice",
+    "aliases": ["Mono Black Sacrifice", "Black Sac"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Turbo Fog",
+    "aliases": ["Fog"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Inside Out Combo",
+    "aliases": ["Tireless Tribe", "Tribe", "RW Tribe", "Boros Tribe"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Burn",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Dimir Terror",
+    "aliases": ["UB Terror"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Food Gardens",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Gruul Ramp",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Selesnya Gates",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Glintblade",
+    "aliases": ["WB Glintblade"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Azorius Gates",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Dimir Affinity",
+    "aliases": ["UB Affinity"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Cycle Storm",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Izzet Terror",
+    "aliases": ["UR Terror"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Dredge",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Ephemerate Tron",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Walls Combo",
+    "aliases": ["Walls"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Boros Bully",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Mardu Synthesizer",
+    "aliases": ["Mardu Synths"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "4c Ephemerate",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Esper Affinity",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Boros Moxite",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Slivers",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Mono-White Heroic",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Mono Red Pingers",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Goblins",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Dimir Control",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Boros Synthesizer",
+    "aliases": ["Boros Synth"],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Poison Storm",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Jund Gardens",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Izzet Affinity",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Devotion",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Infect",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Walls Cascade",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Mono-Blue Delver",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Azorius Faeries",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Black Burn",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Sultai Faeries",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Mono-White Aggro",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Serpentine Curve",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  },
+  {
+    "canonical": "Grixis Control",
+    "aliases": [],
+    "first": "",
+    "last": ""
+  }
+]
