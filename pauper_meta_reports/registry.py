@@ -11,10 +11,12 @@ from rapidfuzz import fuzz, process
 from .db import get_collection
 
 # Signature for the interactive confirmation hook passed to resolve():
-#   ask(raw_text, candidate_canonical_or_None, score) -> answer
-# where answer is "y"/"yes" to accept the candidate, "n"/"no"/"" for a
-# brand-new entry, or any other text naming the actual correct canonical.
-AskCallback = Callable[[str, str | None, float], str]
+#   ask(raw_text, candidate_canonical_or_None, score, matched_alias_or_None) -> answer
+# matched_alias is the specific alias/canonical string that produced the
+# match, which can differ from the candidate itself. Answer is "y"/"yes" to
+# accept the candidate, "n"/"no"/"" for a brand-new entry, or any other text
+# naming the actual correct canonical.
+AskCallback = Callable[[str, str | None, float, str | None], str]
 
 _ASIDE_RE = re.compile(r"\([^)]*\)")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -115,40 +117,51 @@ class AliasRegistry:
                 upsert=True,
             )
 
-    def _candidates(self) -> dict[str, str]:
-        lookup: dict[str, str] = {}
+    def _candidates(self) -> dict[str, tuple[str, str]]:
+        """normalized name/alias -> (canonical, original-cased name/alias)."""
+        lookup: dict[str, tuple[str, str]] = {}
         for entry in self.entries:
             for name in entry.all_names():
-                lookup[normalize(name)] = entry.canonical
+                lookup[normalize(name)] = (entry.canonical, name)
         return lookup
 
-    def _best_match(self, raw: str) -> tuple[str, float] | None:
-        """Best fuzzy match regardless of threshold, or None if the registry is empty."""
+    def _best_match(self, raw: str) -> tuple[str, float, str] | None:
+        """Best fuzzy match regardless of threshold, or None if the registry is empty.
+
+        Returns (canonical, score, matched_text) - matched_text is whichever
+        specific alias or canonical string in the registry actually produced
+        the match, which can differ from canonical itself (e.g. a deck's
+        canonical is "Mono-White Heroic" but the raw text matched via its
+        alias "White Weenies").
+        """
         normalized = normalize(raw)
         if not normalized:
             return None
         candidates = self._candidates()
         if normalized in candidates:
-            return candidates[normalized], 100.0
+            canonical, original = candidates[normalized]
+            return canonical, 100.0, original
         if not candidates:
             return None
         match = process.extractOne(normalized, candidates.keys(), scorer=self.scorer)
         if match is None:
             return None
-        matched_text, score, _ = match
-        return candidates[matched_text], score
+        matched_key, score, _ = match
+        canonical, original = candidates[matched_key]
+        return canonical, score, original
 
     def _exact_match(self, raw: str) -> str | None:
         normalized = normalize(raw)
         if not normalized:
             return None
-        return self._candidates().get(normalized)
+        entry = self._candidates().get(normalized)
+        return entry[0] if entry else None
 
     def lookup(self, raw: str) -> tuple[str, float] | None:
         """Read-only match against canonical names/aliases. Returns (canonical, score) or None."""
         best = self._best_match(raw)
         if best is not None and best[1] >= self.fuzzy_threshold:
-            return best
+            return best[0], best[1]
         return None
 
     def resolve(self, raw: str, auto_add: bool = True, ask: AskCallback | None = None) -> str | None:
@@ -158,15 +171,18 @@ class AliasRegistry:
         short of that is not a "clean" match, no matter how close the fuzzy
         score is, so:
           - if `ask` is given, a human is always consulted via
-            `ask(raw, candidate, score)` before merging or adding anything -
-            `candidate`/`score` describe the closest existing entry, or
-            (None, 0.0) if the registry has nothing close at all. The answer
-            must be "y"/"yes" to accept the candidate, "n"/"no"/"new" for a
-            brand-new entry, or any other text naming the actual correct
-            canonical (matched against the registry, or created if new). A
-            blank/Enter answer means "skip, leave unresolved" (returns None,
-            registry untouched, asked again next time) when allow_skip is
-            True, otherwise it's treated the same as "new".
+            `ask(raw, candidate, score, matched_alias)` before merging or
+            adding anything - `candidate`/`score` describe the closest
+            existing entry, `matched_alias` is the specific alias/canonical
+            string that produced that match (may differ from `candidate`
+            itself), or (None, 0.0, None) if the registry has nothing close
+            at all. The answer must be "y"/"yes" to accept the candidate,
+            "n"/"no"/"new" for a brand-new entry, or any other text naming
+            the actual correct canonical (matched against the registry, or
+            created if new). A blank/Enter answer means "skip, leave
+            unresolved" (returns None, registry untouched, asked again next
+            time) when allow_skip is True, otherwise it's treated the same
+            as "new".
           - otherwise (no human available), a confident fuzzy match
             (score >= fuzzy_threshold) is accepted automatically and anything
             looser becomes a new canonical entry. There's no one to skip for,
@@ -178,8 +194,8 @@ class AliasRegistry:
 
         if ask is not None:
             best = self._best_match(raw)
-            candidate, score = best if best is not None else (None, 0.0)
-            answer = ask(raw, candidate, score).strip()
+            candidate, score, matched_alias = best if best is not None else (None, 0.0, None)
+            answer = ask(raw, candidate, score, matched_alias).strip()
 
             if not answer and self.allow_skip:
                 return None
@@ -194,7 +210,7 @@ class AliasRegistry:
         else:
             best = self._best_match(raw)
             if best is not None and best[1] >= self.fuzzy_threshold:
-                candidate, score = best
+                candidate, score, _ = best
                 self._add_alias(candidate, raw)
                 return candidate
 
@@ -221,6 +237,68 @@ class AliasRegistry:
                     self.save()
                 return
 
+    def get_entry(self, canonical: str) -> AliasEntry | None:
+        """Look up an entry by its exact current canonical name."""
+        for entry in self.entries:
+            if entry.canonical == canonical:
+                return entry
+        return None
+
+    def find_conflict(self, entry: AliasEntry, name: str) -> AliasEntry | None:
+        """Check whether `name` already belongs to some *other* entry (by
+        canonical or alias, normalized) - used before a rename/alias-add to
+        avoid silently colliding two distinct entries."""
+        target = normalize(name)
+        for other in self.entries:
+            if other is entry:
+                continue
+            if any(normalize(n) == target for n in other.all_names()):
+                return other
+        return None
+
+    def rename_canonical(self, old_canonical: str, new_canonical: str) -> bool:
+        """Change an entry's canonical display name in place. The Mongo
+        document identity (entry_id) is untouched, so this is safe even
+        though `canonical` doubles as this registry's natural lookup key
+        elsewhere - the same trick NameRegistry already relies on to rename
+        "Nolan" -> "Nolan S" when a second Nolan shows up.
+
+        Doesn't touch anything outside this registry - callers that also
+        need past results updated (e.g. History.rename_deck) must do that
+        separately.
+        """
+        new_canonical = new_canonical.strip()
+        entry = self.get_entry(old_canonical)
+        if entry is None or not new_canonical:
+            return False
+        entry.canonical = new_canonical
+        self.save()
+        return True
+
+    def add_alias(self, canonical: str, alias: str) -> bool:
+        """Add an alias to an existing entry. Returns False (no-op) if the
+        entry doesn't exist, the alias is blank, it's already there, or it's
+        indistinguishable from the canonical name itself."""
+        alias = alias.strip()
+        entry = self.get_entry(canonical)
+        if entry is None or not alias or normalize(alias) == normalize(canonical):
+            return False
+        if alias in entry.aliases:
+            return False
+        entry.aliases.append(alias)
+        self.save()
+        return True
+
+    def remove_alias(self, canonical: str, alias: str) -> bool:
+        """Remove an alias from an existing entry. Returns False (no-op) if
+        the entry or alias doesn't exist."""
+        entry = self.get_entry(canonical)
+        if entry is None or alias not in entry.aliases:
+            return False
+        entry.aliases.remove(alias)
+        self.save()
+        return True
+
     def add_canonical(self, canonical: str, aliases: list[str] | None = None) -> bool:
         """Add a brand-new canonical entry if it doesn't already resolve to one.
 
@@ -240,13 +318,14 @@ class NameRegistry(AliasRegistry):
         # different people who share a first name. fuzzy_threshold only
         # matters when resolve() is called without a human to ask (ask=None);
         # whenever a human is present, anything short of an exact match asks.
-        # allow_skip=False: every result needs a player, so pressing Enter
-        # adds a new person instead of leaving the result ownerless.
+        # allow_skip=True: an unresolved player can be left as None and queued
+        # for review (see ask_queue_for_review) rather than forced to guess a
+        # new person immediately - the review-queue workflow assumes this.
         super().__init__(
             collection if collection is not None else get_collection("names"),
             fuzzy_threshold=92.0,
             scorer=fuzz.ratio,
-            allow_skip=False,
+            allow_skip=True,
         )
 
     def _add_new(self, raw: str) -> str:

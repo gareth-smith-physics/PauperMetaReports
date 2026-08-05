@@ -162,6 +162,86 @@ class History:
             collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return True
 
+    def backfill(self, field: str, raw_field: str, raw: str, canonical: str) -> int:
+        """Retroactively fill in `field` (player/deck) wherever it was left
+        unresolved (None) with exactly this raw text. Used once a queued
+        review item is finally answered, so past reports reflect the answer
+        instead of staying stuck with an unknown player/deck forever.
+
+        Returns how many results were updated.
+        """
+        collection = getattr(self, "_collection", None)
+        updated = 0
+        for report in self.reports:
+            changed = False
+            for result in report.results:
+                if getattr(result, raw_field) == raw and getattr(result, field) is None:
+                    setattr(result, field, canonical)
+                    changed = True
+                    updated += 1
+            if changed and collection is not None:
+                doc = _report_doc(report)
+                collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return updated
+
+    def backfill_event(self, date: date_, old_event: str, new_event: str) -> int:
+        """Retroactively correct a report's venue - and every one of its
+        results - from a placeholder (e.g. a default used because no known
+        LGS was mentioned in the message) to the real one.
+
+        The report's Mongo _id is derived from date+event, so this can't be
+        a simple field update: the old document (under the old _id) has to
+        be deleted and a new one written under the new _id, or the old
+        placeholder document would be left behind as an orphaned duplicate.
+
+        Returns how many results were updated (0, or the report's full count).
+        """
+        collection = getattr(self, "_collection", None)
+        updated = 0
+        for report in self.reports:
+            if report.date == date and report.event == old_event:
+                old_id = f"{report.date.isoformat()}::{report.event}"
+                report.event = new_event
+                for result in report.results:
+                    result.event = new_event
+                    updated += 1
+                if collection is not None:
+                    collection.delete_one({"_id": old_id})
+                    doc = _report_doc(report)
+                    collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return updated
+
+    def rename_deck(self, old_deck: str, new_deck: str) -> int:
+        """Retroactively rename a deck across every past result - used after
+        correcting a deck's canonical name in the registry, so history stays
+        consistent with the registry instead of pointing at a name that no
+        longer exists there.
+
+        Returns how many results were updated.
+        """
+        collection = getattr(self, "_collection", None)
+        updated = 0
+        for report in self.reports:
+            changed = False
+            for result in report.results:
+                if result.deck == old_deck:
+                    result.deck = new_deck
+                    changed = True
+                    updated += 1
+            if changed and collection is not None:
+                doc = _report_doc(report)
+                collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return updated
+
+    def save_report(self, report: MetaReport) -> None:
+        """Persist a single report after an in-place edit to one of its
+        results (e.g. correcting a misreported deck). `report` must already
+        be one of self.reports - this only re-upserts its document."""
+        collection = getattr(self, "_collection", None)
+        if collection is not None:
+            doc = _report_doc(report)
+            collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+
     def __iter__(self):
         return iter(self.reports)
 

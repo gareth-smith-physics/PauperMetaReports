@@ -57,7 +57,7 @@ def main() -> None:
     else:
         print(f"  Added {len(added)} new deck(s)." if added else "  Deck list already up to date.")
 
-    name_ask = ask_terminal("player", allow_skip=False)
+    name_ask = ask_terminal("player")
     deck_ask = ask_terminal("deck")
 
     messages = split_into_messages(MESSAGES_FILE.read_text())

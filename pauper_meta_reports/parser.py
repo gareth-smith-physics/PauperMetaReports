@@ -41,25 +41,96 @@ def find_lgs_in_message(message: str, lgs_registry: LGSRegistry) -> str | None:
     return best_canonical
 
 
-def _split_name_deck(before: str, after: str, name_registry: NameRegistry) -> tuple[str, str]:
+def _delimiter_split(remainder: str) -> tuple[str, str] | None:
+    """Split `remainder` on the first delimiter found. The order of the two
+    chunks relative to the delimiter is preserved as-is; it's up to the
+    caller to decide which chunk is the name and which is the deck."""
+    for delim in _DELIMITERS:
+        if delim in remainder:
+            part_a, part_b = remainder.split(delim, 1)
+            return part_a.strip(), part_b.strip(" ()")
+    return None
+
+
+def _line_chunks(line: str) -> tuple[str, str] | None:
+    """The two raw chunks around a line's record, for lines whose field
+    order is ambiguous - i.e. not a "Name (Deck)" wrapper (unambiguous: deck
+    is always in the parens) and not delimiter-less (that path already picks
+    out the name via a registry lookup). Returns None for anything else,
+    including lines with no record at all.
+    """
+    match = RECORD_RE.search(line)
+    if not match:
+        return None
+    before = line[: match.start()].strip(" -,/")
+    after = line[match.end() :].strip(" -,/")
+    if after.startswith("(") and after.endswith(")") and len(after) > 2:
+        return None
+    remainder = f"{before} {after}".strip()
+    return _delimiter_split(remainder)
+
+
+def _order_evidence(
+    part_a: str, part_b: str, name_registry: NameRegistry, deck_registry: DeckRegistry
+) -> tuple[int, int]:
+    """How much registry evidence supports reading (part_a, part_b) as
+    (name, deck) vs (deck, name).
+
+    Uses lookup() (thresholded), not raw fuzzy scores: an unrelated brand-new
+    name/deck pair still gets *some* nonzero fuzzy score against everything
+    in a non-empty registry, so comparing raw scores would flip on pure noise
+    whenever both chunks are new. Only a clean match on either side counts as
+    evidence.
+    """
+    default_evidence = int(name_registry.lookup(part_a) is not None) + int(
+        deck_registry.lookup(part_b) is not None
+    )
+    swapped_evidence = int(deck_registry.lookup(part_a) is not None) + int(
+        name_registry.lookup(part_b) is not None
+    )
+    return default_evidence, swapped_evidence
+
+
+def _report_order_is_swapped(message: str, name_registry: NameRegistry, deck_registry: DeckRegistry) -> bool:
+    """A meta report uses one consistent field order for every line, so
+    evidence gathered from whichever lines give a clear registry signal
+    settles the order for the whole report - including lines whose own name
+    and deck are both brand new and would otherwise have nothing to go on.
+    """
+    total_default = total_swapped = 0
+    for line in message.splitlines():
+        chunks = _line_chunks(line)
+        if chunks is None:
+            continue
+        default_evidence, swapped_evidence = _order_evidence(*chunks, name_registry, deck_registry)
+        total_default += default_evidence
+        total_swapped += swapped_evidence
+    return total_swapped > total_default
+
+
+def _split_name_deck(before: str, after: str, name_registry: NameRegistry, swapped: bool) -> tuple[str, str]:
     """Split the text surrounding a record into (raw_name, raw_deck).
 
     `before`/`after` are the line's text before/after the matched record, kept
     separate (rather than blindly concatenated) so that a "Name (Deck)" wrapper
     can be told apart from a deck that merely happens to contain stray parens,
     e.g. "dimir control/terror(?)".
+
+    `swapped` says whether this report's field order is "Deck - Name" rather
+    than the default "Name - Deck" - decided once for the whole report by
+    _report_order_is_swapped, not re-judged per line.
     """
-    before = before.strip(" -,")
-    after = after.strip()
+    before = before.strip(" -,/")
+    after = after.strip(" -,/")
 
     if after.startswith("(") and after.endswith(")") and len(after) > 2:
         return before, after[1:-1].strip()
 
     remainder = f"{before} {after}".strip()
-    for delim in _DELIMITERS:
-        if delim in remainder:
-            name, deck = remainder.split(delim, 1)
-            return name.strip(), deck.strip(" ()")
+    chunks = _delimiter_split(remainder)
+    if chunks is not None:
+        part_a, part_b = chunks
+        return (part_b, part_a) if swapped else (part_a, part_b)
 
     tokens = remainder.split()
     if not tokens:
@@ -83,6 +154,7 @@ def parse_result_line(
     deck_registry: DeckRegistry,
     name_ask: AskCallback | None = None,
     deck_ask: AskCallback | None = None,
+    swapped: bool = False,
 ) -> Result | None:
     line = line.strip()
     if not line or line == "...":
@@ -94,7 +166,7 @@ def parse_result_line(
 
     record = Record.from_match(match)
     before, after = line[: match.start()], line[match.end() :]
-    raw_name, raw_deck = _split_name_deck(before, after, name_registry)
+    raw_name, raw_deck = _split_name_deck(before, after, name_registry, swapped)
     if not raw_name or not raw_deck:
         return None
 
@@ -120,9 +192,17 @@ def parse_meta_report(
     deck_ask: AskCallback | None = None,
 ) -> MetaReport:
     report = MetaReport(date=date, event=event)
+    swapped = _report_order_is_swapped(message, name_registry, deck_registry)
     for line in message.splitlines():
         result = parse_result_line(
-            line, date, event, name_registry, deck_registry, name_ask=name_ask, deck_ask=deck_ask
+            line,
+            date,
+            event,
+            name_registry,
+            deck_registry,
+            name_ask=name_ask,
+            deck_ask=deck_ask,
+            swapped=swapped,
         )
         if result is not None:
             report.add(result)

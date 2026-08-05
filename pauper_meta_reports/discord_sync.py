@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from .interactive import ask_queue_for_review, queue_lgs_review
 from .models import History
 from .parser import find_lgs_in_message, is_meta_report, parse_meta_report, parse_new_lgs_announcement
 from .registry import DeckRegistry, LGSRegistry, NameRegistry
@@ -25,16 +26,22 @@ def load_settings() -> dict:
     return json.loads(SETTINGS_PATH.read_text())
 
 
-def run_sync() -> None:
+def run_sync(default_lgs: str | None = None) -> None:
     """Connect to Discord, pull any meta-report messages posted since the last
     sync out of the configured channel, parse them, and disconnect.
 
-    Runs headless (no `ask` callbacks): a confident fuzzy match on a name or
-    deck is accepted automatically, and anything looser becomes a new
-    registry entry rather than blocking on a terminal prompt that doesn't
-    exist in this context. Ambiguous matches made this way are exactly what
-    a future review-queue feature is meant to catch and let a human correct
-    after the fact - this sync intentionally doesn't try to be interactive.
+    Runs headless: there's no terminal to prompt, so a confident fuzzy match
+    on a name or deck is still accepted automatically, but anything looser
+    is queued in MongoDB's `unresolved` collection for a human to resolve
+    later via the Streamlit review tab, instead of guessing and creating a
+    new registry entry outright. Same idea for a message whose venue can't be
+    determined at all: it's recorded under `default_lgs` as a placeholder so
+    the results aren't lost, and separately queued for someone to confirm or
+    correct the real venue.
+
+    `default_lgs`, if given, overrides settings.json's DEFAULT_LGS - useful
+    for the very first local run, before any LGS has been registered and
+    every message would otherwise need a venue guess.
     """
     load_dotenv()
     token = os.getenv("DISCORD_TOKEN")
@@ -47,7 +54,11 @@ def run_sync() -> None:
     # name - e.g. before the first "New LGS: ..." announcement has ever been
     # posted. Once the registry has entries, most messages should resolve to
     # a real LGS via find_lgs_in_message() instead of falling back to this.
-    default_lgs = settings["DEFAULT_LGS"]
+    default_lgs = default_lgs or settings.get("DEFAULT_LGS")
+    if not default_lgs:
+        raise RuntimeError(
+            "No default LGS available - pass --default-lgs, or set DEFAULT_LGS in settings.json."
+        )
     start_date = datetime.fromisoformat(settings["START_DATE"]).replace(tzinfo=timezone.utc)
 
     name_registry = NameRegistry()
@@ -90,8 +101,12 @@ def run_sync() -> None:
                 if not is_meta_report(message.content):
                     continue
 
-                event = find_lgs_in_message(message.content, lgs_registry) or default_lgs
                 report_date = message.created_at.date()
+                found_event = find_lgs_in_message(message.content, lgs_registry)
+                event = found_event or default_lgs
+                if found_event is None:
+                    queue_lgs_review(report_date, default_lgs, message.content)
+
                 if history.has_report(report_date, event):
                     continue
 
@@ -101,8 +116,8 @@ def run_sync() -> None:
                     event=event,
                     name_registry=name_registry,
                     deck_registry=deck_registry,
-                    name_ask=None,
-                    deck_ask=None,
+                    name_ask=ask_queue_for_review("names", report_date, event),
+                    deck_ask=ask_queue_for_review("decks", report_date, event),
                 )
                 if history.add(report):  # add() persists to MongoDB immediately
                     new_reports += 1

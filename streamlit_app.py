@@ -3,6 +3,7 @@ from __future__ import annotations
 import colorsys
 import math
 import sys
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -13,7 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
-from pauper_meta_reports import History, Record
+from pauper_meta_reports import DeckRegistry, History, LGSRegistry, NameRegistry, Record, get_collection
 
 # --- Palette (project dataviz skill's validated default - see references/palette.md) ---
 CATEGORICAL = [
@@ -147,6 +148,7 @@ def win_rate_figure(agg: pd.DataFrame, group_col: str) -> go.Figure:
             ),
         )
     )
+    fig.add_vline(x=0.5, line=dict(color="red", width=1.5), layer="below")
     fig.update_layout(
         height=max(320, 40 * len(agg) + 140),
         margin=dict(l=10, r=130, t=20, b=40),
@@ -229,7 +231,10 @@ def meta_share_evolution_data(
     min_bin_days: int = 7,
     top_n: int = TOP_N_DECKS,
 ):
-    """Compute each deck's meta share within each time_bin_edges() window."""
+    """Compute each deck's meta share within each time_bin_edges() window.
+    A bin with zero total results gets NaN (not 0%) for every deck, so a
+    window with no event at all reads as a gap to bridge across rather than
+    a real "nobody played anything" data point."""
     edges = time_bin_edges(start_date, end_date, n_segments, min_bin_days)
     n_segments = len(edges) - 1
 
@@ -248,11 +253,11 @@ def meta_share_evolution_data(
         counts = seg_rows["deck"].value_counts()
         total = counts.sum()
         for deck in top_decks:
-            share = (counts.get(deck, 0) / total * 100) if total else 0.0
+            share = (counts.get(deck, 0) / total * 100) if total else float("nan")
             rows.append({"date": edges[seg], "deck": deck, "share": share})
         if has_other:
             other_count = counts[~counts.index.isin(top_decks)].sum() if not counts.empty else 0
-            other_share = (other_count / total * 100) if total else 0.0
+            other_share = (other_count / total * 100) if total else float("nan")
             rows.append({"date": edges[seg], "deck": "Other", "share": other_share})
 
     return pd.DataFrame(rows), deck_order, list(edges)
@@ -265,7 +270,12 @@ def meta_share_evolution_figure(
     last_edge = edges[-1]
     for i, deck in enumerate(deck_order):
         color = OTHER_GRAY if deck == "Other" else EXTENDED_CATEGORICAL[i % len(EXTENDED_CATEGORICAL)]
-        d = evolution_df[evolution_df["deck"] == deck].sort_values("date")
+        # Drop NaN-share (totally empty) bins outright rather than plotting
+        # them as 0 - Plotly's own linear interpolation then draws a single
+        # straight line straight from the last real bin to the next one,
+        # bridging the empty window smoothly instead of dipping to 0% and
+        # back up.
+        d = evolution_df[(evolution_df["deck"] == deck) & evolution_df["share"].notna()].sort_values("date")
         # Each row's date is its bin's *start*. Repeat the last bin's value out to
         # the final boundary (step-shaped) so the fill reaches the true right edge
         # instead of stopping one bin-width short of it.
@@ -280,28 +290,112 @@ def meta_share_evolution_figure(
                 stackgroup="one",
                 line=dict(width=0.5, color=color),
                 fillcolor=color,
-                hoverinfo="skip",  # the proxy traces below build the real tooltip
+                hoverinfo="skip",  # purely visual - the marker-grid traces below own all hover
             )
         )
 
     for edge in edges[:-1]:
+        # Skip a bin that's genuinely empty - the fill bridges straight
+        # through it now, so a separator line there would mark a boundary
+        # that no longer visually exists.
+        if evolution_df[evolution_df["date"] == edge]["share"].isna().all():
+            continue
         fig.add_vline(x=edge, line=dict(color="#000000", width=1), layer="above")
 
-    for i, deck in enumerate(deck_order):
-        color = OTHER_GRAY if deck == "Other" else EXTENDED_CATEGORICAL[i % len(EXTENDED_CATEGORICAL)]
-        d = evolution_df[evolution_df["deck"] == deck].copy()
-        d["hover_y"] = d["share"].where(d["share"] > 0.0)
-        fig.add_trace(
-            go.Scatter(
-                x=d["date"],
-                y=d["hover_y"],
-                name=deck,
-                mode="lines",
-                line=dict(color=color, width=4),
-                hovertemplate=f"<b>{deck}</b>: %{{y:.1f}}%<extra></extra>",
-                showlegend=False,
-            )
+    # Per-deck hover, for hovering a shaded band strictly *between* bin edges.
+    # hoveron="fills" doesn't work for this: Plotly anchors a fill's tooltip
+    # to one fixed reference point on the trace, not to the cursor, so it
+    # doesn't track position within the shape at all. Instead, build a dense
+    # grid of invisible marker points that actually covers each deck's
+    # stacked area - interpolating its share linearly between the two
+    # bracketing edges (matching the fill's own linear interpolation) and
+    # stacking decks in draw order to get each one's true bottom/top at that
+    # x - so "closest" hovermode finds a real nearby point wherever the
+    # cursor is and names the right deck. Samples are kept strictly inside
+    # each bin (never exactly on an edge) so they never compete with the
+    # per-edge combined-box trace below for priority right on a line.
+    def _share_points(deck: str) -> list:
+        # Real (non-NaN) (x, share) points only, sorted - same set the fill
+        # trace above draws, so hover interpolation matches what's visually
+        # shown, including bridging straight across any empty bins.
+        d = evolution_df[(evolution_df["deck"] == deck) & evolution_df["share"].notna()].sort_values("date")
+        points = list(zip(d["date"], d["share"]))
+        points.append((last_edge, d["share"].iloc[-1]))
+        return points
+
+    def _lerp(points: list, x_ts) -> float:
+        if x_ts <= points[0][0]:
+            return points[0][1]
+        for (x0, y0), (x1, y1) in zip(points, points[1:]):
+            if x0 <= x_ts <= x1:
+                return y0 if x1 == x0 else y0 + (y1 - y0) * (x_ts - x0) / (x1 - x0)
+        return points[-1][1]
+
+    deck_series = {deck: _share_points(deck) for deck in deck_order}
+    n_x_per_bin = 8
+    n_y_samples = 6
+    grid_x, grid_y, grid_text = [], [], []
+    for x0, x1 in zip(edges, edges[1:]):
+        for xs in range(n_x_per_bin):
+            x_ts = x0 + (x1 - x0) * ((xs + 0.5) / n_x_per_bin)  # strictly inside (x0, x1)
+            cumulative = 0.0
+            for deck in deck_order:
+                share = _lerp(deck_series[deck], x_ts)
+                bottom, cumulative = cumulative, cumulative + share
+                if share <= 0.0:
+                    continue
+                for ys in range(n_y_samples):
+                    grid_x.append(x_ts)
+                    grid_y.append(bottom + share * ((ys + 0.5) / n_y_samples))
+                    grid_text.append(deck)
+
+    fig.add_trace(
+        go.Scatter(
+            x=grid_x,
+            y=grid_y,
+            mode="markers",
+            marker=dict(size=1, opacity=0),
+            hoverinfo="text",
+            hovertext=[f"<b>{deck}</b>" for deck in grid_text],
+            showlegend=False,
         )
+    )
+
+    # Combined per-bin stats box, at each bin edge only: a column of stacked,
+    # invisible marker points spanning the full height of the chart at that
+    # edge's x, all sharing one hovertext listing every deck's share in that
+    # bin (0% decks omitted). Added last so it wins any tie against the
+    # per-deck grid right on the line. Skipped entirely for a genuinely empty
+    # bin - the fill no longer treats that edge as a distinct region (it's
+    # bridged straight through), so a hover column there would have nothing
+    # useful to say and would only crowd out the per-deck grid's tooltip
+    # right where it's bridging across the gap.
+    hover_x, hover_y, hover_text = [], [], []
+    n_edge_y_samples = 26
+    for edge in edges[:-1]:
+        bin_rows = evolution_df[evolution_df["date"] == edge]
+        lines = [
+            f"<b>{row.deck}</b>: {row.share:.1f}%" for row in bin_rows.itertuples() if row.share > 0.0
+        ]
+        if not lines:
+            continue
+        text = "<br>".join(lines)
+        for step in range(n_edge_y_samples):
+            hover_x.append(edge)
+            hover_y.append(step * 100 / (n_edge_y_samples - 1))
+            hover_text.append(text)
+
+    fig.add_trace(
+        go.Scatter(
+            x=hover_x,
+            y=hover_y,
+            mode="markers",
+            marker=dict(size=8, opacity=0),
+            hoverinfo="text",
+            hovertext=hover_text,
+            showlegend=False,
+        )
+    )
 
     fig.update_layout(
         height=680,
@@ -311,7 +405,7 @@ def meta_share_evolution_figure(
         xaxis=dict(gridcolor=GRIDLINE, showgrid=True, title=None, range=[edges[0], edges[-2]]),
         yaxis=dict(range=[0, 100], ticksuffix="%", gridcolor=GRIDLINE, showgrid=True, title=None),
         legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="left", x=0),
-        hovermode="x unified",
+        hovermode="closest",
         font=dict(color=TEXT_PRIMARY),
     )
     return fig
@@ -521,6 +615,7 @@ TAB_LABELS = [
     "Deck Win Rates",
     "Meta Share Evolution",
     "Deck Win Rate Evolution",
+    "Unresolved",
 ]
 
 # st.tabs() has no persistence: it silently snaps back to the first tab on any
@@ -632,7 +727,12 @@ if active_tab == "Meta Share":
     st.subheader("Deck Meta Share")
     #st.caption(f"Share of all results in range. Top {TOP_N_DECKS} decks shown individually; the rest are folded into “Other”.")
 
-    labels, values, colors, hover_extra, deck_counts = meta_share_data(filtered)
+    venues = ["All"] + sorted(filtered["event"].unique())
+    selected_venue = st.selectbox("Venue", venues, key="meta_share_venue")
+    venue_filtered = filtered if selected_venue == "All" else filtered[filtered["event"] == selected_venue]
+
+    filtered_known_decks = venue_filtered[venue_filtered["deck"] != "Unknown"]
+    labels, values, colors, hover_extra, deck_counts = meta_share_data(filtered_known_decks)
     st.plotly_chart(meta_share_figure(labels, values, colors, hover_extra), width="stretch")
     
     table = (
@@ -659,7 +759,7 @@ if active_tab == "Deck Win Rates":
     #    "Error bars are a 68% confidence interval (+/- 1 SD, Wilson score) - wide bars mean too few matches to be sure."
     #)
 
-    deck_agg = win_rate_table(filtered, "deck", 1)
+    deck_agg = win_rate_table(filtered[filtered["deck"] != "Unknown"], "deck", 1)
     if deck_agg.empty:
         st.info("No decks meet the minimum-matches filter in this range.")
     else:
@@ -726,3 +826,138 @@ if active_tab == "Deck Win Rate Evolution":
                 "ci_upper_%": st.column_config.NumberColumn("CI Upper %", format="%.1f%%"),
             },
         )
+
+if active_tab == "Unresolved":
+    st.subheader("Unresolved deck, player, and venue names")
+    st.caption(
+        "Ambiguous names/decks the Discord parser couldn't confidently match on its own, plus "
+        "reports whose venue couldn't be determined from the message text. Resolving one here "
+        "updates the registry and retroactively fills in any past results that were left "
+        "unknown or under a placeholder venue because of it."
+    )
+
+    unresolved_collection = get_collection("unresolved")
+    pending_items = list(unresolved_collection.find({}).sort("date", -1))
+
+    if not pending_items:
+        st.info("Nothing pending review.")
+
+    # Loaded once and reused across items, rather than re-querying MongoDB
+    # per pending item.
+    name_registry_for_review = NameRegistry()
+    deck_registry_for_review = DeckRegistry()
+    lgs_registry_for_review = LGSRegistry()
+
+    for item in pending_items:
+        registry_kind = item["registry"]  # "names", "decks", or "lgs"
+
+        if registry_kind == "lgs":
+            report_date_str = item["raw"]
+            placeholder_event = item.get("event")
+            snippet = item.get("message_snippet", "")
+
+            with st.form(key=f"resolve_lgs_{item['_id']}"):
+                st.markdown(
+                    f"Unknown venue for the report on **{report_date_str}** "
+                    f"-- currently recorded as **{placeholder_event}**"
+                )
+                with st.expander("Message text"):
+                    st.text(snippet)
+
+                lgs_options = sorted(e.canonical for e in lgs_registry_for_review.entries)
+                selected_lgs = st.selectbox(
+                    "Existing LGS",
+                    lgs_options,
+                    index=None,
+                    placeholder="Select an existing LGS...",
+                    key=f"select_lgs_{item['_id']}",
+                    label_visibility="collapsed",
+                )
+                new_lgs_name = st.text_input(
+                    "Or type a new LGS name", key=f"new_lgs_{item['_id']}", placeholder="Or type a new LGS name..."
+                )
+                submitted = st.form_submit_button("Resolve")
+
+                if submitted:
+                    typed = new_lgs_name.strip()
+                    chosen = typed or selected_lgs
+                    if not chosen:
+                        st.warning("Select an existing LGS or type a new one before resolving.")
+                    else:
+                        if typed:
+                            lgs_registry_for_review.add_canonical(typed)
+                        report_date_obj = date.fromisoformat(report_date_str)
+                        updated_count = History.load().backfill_event(report_date_obj, placeholder_event, chosen)
+                        unresolved_collection.delete_one({"_id": item["_id"]})
+                        load_results.clear()
+                        st.success(
+                            f"Resolved venue for {report_date_str} -> **{chosen}** "
+                            f"({updated_count} result(s) updated)."
+                        )
+                        st.rerun()
+            continue
+
+        label = "player" if registry_kind == "names" else "deck"
+        registry = name_registry_for_review if registry_kind == "names" else deck_registry_for_review
+        raw = item["raw"]
+        candidate = item.get("candidate")
+        score = item.get("score") or 0.0
+        matched_alias = item.get("matched_alias")
+
+        with st.form(key=f"resolve_{item['_id']}"):
+            st.markdown(f"Unknown {label} name: **{raw}** -- Seen {item['date']} @ {item['event']}")
+            if candidate:
+                header = f"Closest match: **{candidate}**"
+                if matched_alias and matched_alias.lower() != candidate.lower():
+                    header += f' ("{matched_alias}")'
+                st.markdown(header)
+
+            unknown_label = "Unknown deck"
+            select_label = f"Select a different existing {label}"
+            options = []
+            if candidate:
+                options.append(f"Same as {candidate}")
+            options.append(f"New {label}")
+            if registry_kind == "decks":
+                options.append(unknown_label)
+            options.append(select_label)
+
+            choice = st.radio("Decision", options, key=f"choice_{item['_id']}", label_visibility="collapsed")
+            existing_options = sorted(e.canonical for e in registry.entries)
+            selected_existing = st.selectbox(
+                f"Existing {label}",
+                existing_options,
+                index=None,
+                placeholder=f"Select an existing {label}...",
+                key=f"select_{item['_id']}",
+                label_visibility="collapsed",
+            )
+            submitted = st.form_submit_button("Resolve")
+
+            if submitted:
+                def synthetic_ask(_raw: str, _candidate: str | None, _score: float, _matched_alias: str | None) -> str:
+                    if candidate and choice == f"Same as {candidate}":
+                        return "y"
+                    if choice == select_label:
+                        return selected_existing or ""
+                    if choice == unknown_label:
+                        # Typed-correction path, not "y"/"n": resolves (or creates,
+                        # the first time) a shared "Unknown" catch-all deck, and
+                        # aliases this raw text to it so the same joke/unparseable
+                        # name auto-resolves next time instead of asking again.
+                        return "Unknown"
+                    return "n"
+
+                canonical = registry.resolve(raw, ask=synthetic_ask)
+
+                if canonical is None:
+                    st.warning("Select an existing entry before resolving, or pick one of the other options.")
+                else:
+                    field = "player" if registry_kind == "names" else "deck"
+                    raw_field = "raw_player" if registry_kind == "names" else "raw_deck"
+                    updated_count = History.load().backfill(field, raw_field, raw, canonical)
+
+                    unresolved_collection.delete_one({"_id": item["_id"]})
+                    load_results.clear()
+                    st.success(f"Resolved **{raw}** -> **{canonical}** ({updated_count} past result(s) updated).")
+                    st.rerun()
