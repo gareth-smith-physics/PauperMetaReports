@@ -760,8 +760,16 @@ if active_tab == "Deck Win Rates":
     #)
 
     deck_agg = win_rate_table(filtered[filtered["deck"] != "Unknown"], "deck", 1)
+
+    deck_search = st.text_input("Search decks", key="deck_win_rate_search", placeholder="Search for a deck...", label_visibility="collapsed")
+    if deck_search.strip():
+        deck_agg = deck_agg[deck_agg["deck"].str.contains(deck_search.strip(), case=False, regex=False)]
+
     if deck_agg.empty:
-        st.info("No decks meet the minimum-matches filter in this range.")
+        if deck_search.strip():
+            st.info(f"No decks match '{deck_search.strip()}'.")
+        else:
+            st.info("No decks meet the minimum-matches filter in this range.")
     else:
         st.plotly_chart(win_rate_figure(deck_agg, "deck"), width="stretch")
         #with st.expander("View data"):
