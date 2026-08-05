@@ -35,7 +35,7 @@ def load_settings() -> dict:
     return {"CHANNEL_ID": int(channel_id), "START_DATE": start_date}
 
 
-def run_sync(default_lgs: str | None = None) -> None:
+def run_sync(default_lgs: str | None = None, full_rescan: bool = False) -> None:
     """Connect to Discord, pull any meta-report messages posted since the last
     sync out of the configured channel, parse them, and disconnect.
 
@@ -51,6 +51,22 @@ def run_sync(default_lgs: str | None = None) -> None:
     `default_lgs`, if given, is used whenever a message doesn't mention any
     known LGS - needed for the very first run, before any LGS has been
     registered and every message would otherwise need a venue guess.
+
+    `full_rescan`, if True, scans from START_DATE instead of resuming from
+    the last recorded report's date - useful after a parser fix, to pick up
+    messages that were previously skipped or failed to produce a report
+    under older parsing logic (and to benefit from the registries having
+    grown since, which can turn a message that was too ambiguous to
+    classify back then into a clean match now). This also re-checks reports
+    that already exist: has_report() being true no longer skips the message
+    outright, it just switches from "add a new report" to "add any of this
+    message's lines that aren't already in the existing report" - covering
+    a message that partially failed (some lines parsed, some didn't) under
+    older logic, not just ones that failed entirely. Either way, this is
+    safe to run repeatedly and won't create duplicates or touch a result
+    that's already recorded - a result that's already there but was parsed
+    *incorrectly* under old logic won't be corrected by this alone, since
+    matching is by raw_line, not by whether the parse was right.
     """
     load_dotenv()
     token = os.getenv("DISCORD_TOKEN")
@@ -71,11 +87,12 @@ def run_sync(default_lgs: str | None = None) -> None:
 
     # Re-scan from the last known report's own date (not the day after) so a
     # second same-day report isn't missed; History.has_report() skips anything
-    # already recorded so this is safe to overlap.
+    # already recorded so this is safe to overlap. full_rescan skips straight
+    # to start_date instead, ignoring how far the incremental sync has gotten.
     after = (
-        datetime.combine(history.last_date, datetime.min.time(), tzinfo=timezone.utc)
-        if history.last_date is not None
-        else start_date
+        start_date
+        if full_rescan or history.last_date is None
+        else datetime.combine(history.last_date, datetime.min.time(), tzinfo=timezone.utc)
     )
 
     intents = discord.Intents.default()
@@ -101,6 +118,7 @@ def run_sync(default_lgs: str | None = None) -> None:
 
             print(f"Scanning #{channel} for meta reports posted after {after.date()}...")
             new_reports = 0
+            filled_in_results = 0
             # limit=None is required - discord.py's default (100) silently
             # truncates a channel with more than 100 messages since `after`,
             # which is almost every real channel once chatter is mixed in
@@ -122,7 +140,8 @@ def run_sync(default_lgs: str | None = None) -> None:
                 if found_event is None:
                     queue_lgs_review(report_date, default_lgs, message.content)
 
-                if history.has_report(report_date, event):
+                already_recorded = history.has_report(report_date, event)
+                if already_recorded and not full_rescan:
                     continue
 
                 report = parse_meta_report(
@@ -134,11 +153,24 @@ def run_sync(default_lgs: str | None = None) -> None:
                     name_ask=ask_queue_for_review("names", report_date, event),
                     deck_ask=ask_queue_for_review("decks", report_date, event),
                 )
-                if history.add(report):  # add() persists to MongoDB immediately
+                if already_recorded:
+                    # The report already exists, but re-parsing it now (newer
+                    # logic, larger registries) may turn up lines that failed
+                    # to parse and were silently dropped the first time -
+                    # add_missing_results() only ever adds those, matched by
+                    # raw_line, never touches a result that's already there.
+                    added = history.add_missing_results(report_date, event, report.results)
+                    if added:
+                        filled_in_results += added
+                        print(f"  {report_date} @ {event}: filled in {added} previously-missing result(s)")
+                elif history.add(report):  # add() persists to MongoDB immediately
                     new_reports += 1
                     print(f"  {report_date}: recorded {len(report)} result(s)")
 
-            print(f"Done. {new_reports} new meta report(s) recorded.")
+            print(
+                f"Done. {new_reports} new meta report(s) recorded, "
+                f"{filled_in_results} previously-missing result(s) filled in."
+            )
         except Exception as exc:
             sync_error = exc
             raise

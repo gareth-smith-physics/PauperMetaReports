@@ -311,6 +311,36 @@ class History:
                 collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return affected
 
+    def add_missing_results(self, date: date_, event: str, candidate_results: list[Result]) -> int:
+        """For an already-recorded report, add any of `candidate_results`
+        whose raw_line isn't already present among its existing results -
+        used when re-parsing a message with newer/fixed parser logic turns
+        up lines that failed to parse (and were silently dropped) under
+        whatever logic was active when the report was first recorded, even
+        though the report itself already exists.
+
+        Matches purely on raw_line, so this only ever *adds* missing lines -
+        it won't correct a result that's already there but was parsed
+        wrong under old logic (same raw_line, wrong player/deck); that
+        needs a targeted fix instead (e.g. scripts/edit_result.py).
+
+        Returns how many results were added. 0 (no-op) if no report exists
+        yet for this date+event - the caller should use add() for that case.
+        """
+        report = next((r for r in self.reports if r.date == date and r.event == event), None)
+        if report is None:
+            return 0
+        existing_raw_lines = {r.raw_line for r in report.results}
+        added = 0
+        for result in candidate_results:
+            if result.raw_line not in existing_raw_lines:
+                report.results.append(result)
+                existing_raw_lines.add(result.raw_line)
+                added += 1
+        if added:
+            self.save_report(report)
+        return added
+
     def save_report(self, report: MetaReport) -> None:
         """Persist a single report after an in-place edit to one of its
         results (e.g. correcting a misreported deck). `report` must already

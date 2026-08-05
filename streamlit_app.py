@@ -596,11 +596,12 @@ if df.empty:
     st.stop()
 
 min_date, max_date = df["date"].min(), df["date"].max()
+default_start = max(min_date, date(2026, 1, 1))
 
 with st.sidebar:
     st.header("Filters")
     date_range = st.date_input(
-        "Date range", value=(min_date, max_date), min_value=min_date, max_value=max_date
+        "Date range", value=(default_start, max_date), min_value=min_date, max_value=max_date
     )
     #min_matches = st.slider(
     #    "Minimum matches played",
