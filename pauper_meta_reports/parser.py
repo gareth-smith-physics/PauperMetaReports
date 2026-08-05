@@ -8,6 +8,7 @@ from .registry import AskCallback, DeckRegistry, LGSRegistry, NameRegistry, norm
 
 _DELIMITERS = (",", " - ")
 _NEW_LGS_RE = re.compile(r"new\s+lgs\s*:\s*(.+)", re.IGNORECASE)
+_PAREN_WRAP_RE = re.compile(r"^(.*)\(([^()]+)\)$")
 
 
 def is_meta_report(message: str, min_results: int = 2) -> bool:
@@ -41,33 +42,57 @@ def find_lgs_in_message(message: str, lgs_registry: LGSRegistry) -> str | None:
     return best_canonical
 
 
-def _delimiter_split(remainder: str) -> tuple[str, str] | None:
-    """Split `remainder` on the first delimiter found. The order of the two
-    chunks relative to the delimiter is preserved as-is; it's up to the
-    caller to decide which chunk is the name and which is the deck."""
-    for delim in _DELIMITERS:
-        if delim in remainder:
-            part_a, part_b = remainder.split(delim, 1)
-            return part_a.strip(), part_b.strip(" ()")
-    return None
-
-
-def _line_chunks(line: str) -> tuple[str, str] | None:
-    """The two raw chunks around a line's record, for lines whose field
-    order is ambiguous - i.e. not a "Name (Deck)" wrapper (unambiguous: deck
-    is always in the parens) and not delimiter-less (that path already picks
-    out the name via a registry lookup). Returns None for anything else,
-    including lines with no record at all.
-    """
+def _line_remainder(line: str) -> str | None:
+    """The line's name/deck text: the record removed, and delimiter-adjacent
+    punctuation trimmed off each side before rejoining. None if the line has
+    no record at all."""
     match = RECORD_RE.search(line)
     if not match:
         return None
     before = line[: match.start()].strip(" -,/")
     after = line[match.end() :].strip(" -,/")
-    if after.startswith("(") and after.endswith(")") and len(after) > 2:
+    return f"{before} {after}".strip()
+
+
+def _paren_split(remainder: str) -> tuple[str, str] | None:
+    """Split into (prefix, interior) if `remainder` ends in exactly one
+    well-formed, non-nested parenthetical group wrapping the whole tail -
+    e.g. "Spy Combo (Aria)" or "Gareth (Dimir Control)". Which side is the
+    name and which is the deck isn't decided here - some messages wrap the
+    deck, others wrap the player. The interior must contain a letter, so a
+    deck's own incidental punctuation (e.g. "dimir control/terror(?)") isn't
+    mistaken for a wrapped name.
+    """
+    match = _PAREN_WRAP_RE.match(remainder)
+    if not match:
         return None
-    remainder = f"{before} {after}".strip()
-    return _delimiter_split(remainder)
+    prefix, interior = match.group(1).strip(), match.group(2).strip()
+    if not prefix or not any(c.isalpha() for c in interior):
+        return None
+    return prefix, interior
+
+
+def _delimiter_split(remainder: str) -> tuple[str, str] | None:
+    """Split on the first "," or " - " found. Order is preserved as-is; the
+    caller decides which chunk is the name and which is the deck."""
+    for delim in _DELIMITERS:
+        if delim in remainder:
+            part_a, part_b = remainder.split(delim, 1)
+            return part_a.strip(), part_b.strip()
+    return None
+
+
+def _line_chunks(line: str) -> tuple[str, str] | None:
+    """The two raw chunks flanking a line's record, in on-the-page order -
+    from a parenthetical wrapper or a delimiter, whichever matches. None for
+    a line with no record, or no recognizable two-chunk shape (a
+    delimiter-less line falls back to a token-based name search instead -
+    see _split_name_deck).
+    """
+    remainder = _line_remainder(line)
+    if remainder is None:
+        return None
+    return _paren_split(remainder) or _delimiter_split(remainder)
 
 
 def _order_evidence(
@@ -108,41 +133,30 @@ def _report_order_is_swapped(message: str, name_registry: NameRegistry, deck_reg
     return total_swapped > total_default
 
 
-def _split_name_deck(before: str, after: str, name_registry: NameRegistry, swapped: bool) -> tuple[str, str]:
-    """Split the text surrounding a record into (raw_name, raw_deck).
+def _split_name_deck(line: str, name_registry: NameRegistry, swapped: bool) -> tuple[str, str]:
+    """Split a line's name/deck text into (raw_name, raw_deck).
 
-    `before`/`after` are the line's text before/after the matched record, kept
-    separate (rather than blindly concatenated) so that a "Name (Deck)" wrapper
-    can be told apart from a deck that merely happens to contain stray parens,
-    e.g. "dimir control/terror(?)".
-
-    `swapped` says whether this report's field order is "Deck - Name" rather
-    than the default "Name - Deck" - decided once for the whole report by
-    _report_order_is_swapped, not re-judged per line.
+    `swapped` says whether this report's field order puts the deck first
+    (paren case: "Deck (Name)"; delimiter case: "Deck - Name") rather than
+    the default "Name (Deck)"/"Name - Deck" - decided once for the whole
+    report by _report_order_is_swapped, not re-judged per line.
     """
-    before = before.strip(" -,/")
-    after = after.strip(" -,/")
-
-    if after.startswith("(") and after.endswith(")") and len(after) > 2:
-        return before, after[1:-1].strip()
-
-    remainder = f"{before} {after}".strip()
-    chunks = _delimiter_split(remainder)
+    remainder = _line_remainder(line) or ""
+    chunks = _paren_split(remainder) or _delimiter_split(remainder)
     if chunks is not None:
         part_a, part_b = chunks
         return (part_b, part_a) if swapped else (part_a, part_b)
 
+    # No delimiter or parens at all: try the longest known-name prefix
+    # first, so a multi-word name ("Gareth S") isn't chopped into
+    # name="Gareth", deck="S ...".
     tokens = remainder.split()
     if not tokens:
         return "", ""
-
-    # No delimiter at all: try the longest known-name prefix first, so a
-    # multi-word name ("Gareth S") isn't chopped into name="Gareth", deck="S ...".
     for n in range(len(tokens), 0, -1):
         candidate = " ".join(tokens[:n])
         if name_registry.lookup(candidate) is not None:
             return candidate, " ".join(tokens[n:]).strip()
-
     return tokens[0], " ".join(tokens[1:]).strip()
 
 
@@ -163,10 +177,9 @@ def parse_result_line(
     match = RECORD_RE.search(line)
     if not match:
         return None
-
     record = Record.from_match(match)
-    before, after = line[: match.start()], line[match.end() :]
-    raw_name, raw_deck = _split_name_deck(before, after, name_registry, swapped)
+
+    raw_name, raw_deck = _split_name_deck(line, name_registry, swapped)
     if not raw_name or not raw_deck:
         return None
 

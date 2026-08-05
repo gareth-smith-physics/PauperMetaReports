@@ -18,25 +18,22 @@ from .db import get_collection
 # naming the actual correct canonical.
 AskCallback = Callable[[str, str | None, float, str | None], str]
 
-_ASIDE_RE = re.compile(r"\([^)]*\)")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
 def normalize(text: str) -> str:
-    """Casefold and strip parenthetical asides for matching purposes."""
-    text = _ASIDE_RE.sub(" ", text)
+    """Casefold and strip whitespace for matching purposes."""
     text = _WHITESPACE_RE.sub(" ", text)
     return text.strip().lower()
 
 
 def clean_for_storage(text: str) -> str:
-    """Strip parenthetical asides and title-case each word, for new canonical entries.
+    """Strip whitespace and title-case each word, for new canonical entries.
 
     Applied only when the parsing process mints a brand-new canonical entry
     (raw player/deck text is inconsistently cased - "chad", "HUXLEY BERGMAN",
     "monoU terror"); Goldfish-seeded decks and existing entries are untouched.
     """
-    text = _ASIDE_RE.sub(" ", text)
     text = _WHITESPACE_RE.sub(" ", text)
     text = text.strip()
     return " ".join(word[:1].upper() + word[1:].lower() for word in text.split(" ") if word)
