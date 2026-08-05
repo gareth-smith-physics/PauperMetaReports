@@ -8,7 +8,10 @@ from pymongo.collection import Collection
 
 from .db import get_collection
 
-RECORD_RE = re.compile(r"(?<!\d)([0-3])-([0-3])(?:-([0-3]))?(?!\d)")
+# Wins/losses/draws each 0-9 (a single digit) - wide enough for any
+# realistically-sized Swiss event (e.g. "4-0" from a 4-round event with an
+# undefeated record), not just the 3-round-cap events seen in early data.
+RECORD_RE = re.compile(r"(?<!\d)([0-9])-([0-9])(?:-([0-9]))?(?!\d)")
 
 
 @dataclass(frozen=True)
