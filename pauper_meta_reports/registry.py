@@ -296,6 +296,22 @@ class AliasRegistry:
         self.save()
         return True
 
+    def delete(self, canonical: str) -> bool:
+        """Remove an entry - and its Mongo document - entirely. Returns
+        False (no-op) if no entry has this canonical name.
+
+        Doesn't touch anything outside this registry - a caller deleting a
+        player/deck/LGS that past results reference needs to handle that
+        separately (e.g. History.unresolve_player for a full delete, or
+        History.rename_player/rename_deck/rename_event for a merge).
+        """
+        entry = self.get_entry(canonical)
+        if entry is None:
+            return False
+        self.entries.remove(entry)
+        self.collection.delete_one({"_id": entry.entry_id})
+        return True
+
     def add_canonical(self, canonical: str, aliases: list[str] | None = None) -> bool:
         """Add a brand-new canonical entry if it doesn't already resolve to one.
 

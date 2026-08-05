@@ -50,7 +50,7 @@ TEXT_SECONDARY = "#52514e"
 GRIDLINE = "#404040"  # dark gray, for charts set against a transparent/dark backdrop
 SURFACE = "#fcfcfb"
 
-TOP_N_DECKS = 20  # categorical series-count ladder: past ~7, fold the tail into "Other"
+TOP_N_DECKS = 30  # categorical series-count ladder: past ~7, fold the tail into "Other"
 Z_68 = 1.0  # ~68.27% CI (+/- 1 SD) under the normal approximation the Wilson formula is built on
 
 

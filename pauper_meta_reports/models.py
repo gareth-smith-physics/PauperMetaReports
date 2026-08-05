@@ -261,6 +261,53 @@ class History:
                 collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return updated
 
+    def rename_player(self, old_player: str, new_player: str) -> int:
+        """Retroactively rename a player across every past result - used
+        after correcting a player's canonical name in the registry, so
+        history stays consistent with the registry instead of pointing at a
+        name that no longer exists there.
+
+        Returns how many results were updated.
+        """
+        collection = getattr(self, "_collection", None)
+        updated = 0
+        for report in self.reports:
+            changed = False
+            for result in report.results:
+                if result.player == old_player:
+                    result.player = new_player
+                    changed = True
+                    updated += 1
+            if changed and collection is not None:
+                doc = _report_doc(report)
+                collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return updated
+
+    def unresolve_player(self, player: str) -> list[Result]:
+        """Reset every past result whose player matches `player` back to
+        unresolved (None) - used when deleting a player from the registry
+        entirely, so their past results go back to needing review instead of
+        silently keeping a stale canonical name that no longer exists there.
+
+        Returns the affected Result objects (each now with player=None), so
+        the caller can queue each one for review using its own raw text,
+        date, and event - queueing itself is outside History's job, same as
+        everywhere else in this codebase (see interactive.py).
+        """
+        collection = getattr(self, "_collection", None)
+        affected: list[Result] = []
+        for report in self.reports:
+            changed = False
+            for result in report.results:
+                if result.player == player:
+                    result.player = None
+                    changed = True
+                    affected.append(result)
+            if changed and collection is not None:
+                doc = _report_doc(report)
+                collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return affected
+
     def save_report(self, report: MetaReport) -> None:
         """Persist a single report after an in-place edit to one of its
         results (e.g. correcting a misreported deck). `report` must already
