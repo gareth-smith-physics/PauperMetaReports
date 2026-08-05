@@ -6,15 +6,8 @@ from datetime import date as date_
 from .models import RECORD_RE, MetaReport, Record, Result
 from .registry import AskCallback, DeckRegistry, LGSRegistry, NameRegistry, normalize
 
-_DELIMITERS = (",", " - ")
 _NEW_LGS_RE = re.compile(r"new\s+lgs\s*:\s*(.+)", re.IGNORECASE)
-_PAREN_WRAP_RE = re.compile(r"^(.*)\(([^()]+)\)$")
-
-
-def is_meta_report(message: str, min_results: int = 2) -> bool:
-    """Heuristic: a real meta-report message has multiple record-shaped lines."""
-    hits = sum(1 for line in message.splitlines() if RECORD_RE.search(line))
-    return hits >= min_results
+_SEGMENT_SPLIT_RE = re.compile(r"[,/:\-()]+")
 
 
 def parse_new_lgs_announcement(message: str) -> str | None:
@@ -54,45 +47,37 @@ def _line_remainder(line: str) -> str | None:
     return f"{before} {after}".strip()
 
 
-def _paren_split(remainder: str) -> tuple[str, str] | None:
-    """Split into (prefix, interior) if `remainder` ends in exactly one
-    well-formed, non-nested parenthetical group wrapping the whole tail -
-    e.g. "Spy Combo (Aria)" or "Gareth (Dimir Control)". Which side is the
-    name and which is the deck isn't decided here - some messages wrap the
-    deck, others wrap the player. The interior must contain a letter, so a
-    deck's own incidental punctuation (e.g. "dimir control/terror(?)") isn't
-    mistaken for a wrapped name.
+def _line_segments(line: str) -> list[str] | None:
+    """Split a record-bearing line into its non-record segments, in
+    on-the-page order. Any run of "," "/" "-" ":" "(" or ")" counts as a
+    delimiter - interchangeably, in any combination, with or without
+    surrounding spaces - so "A / B - C", "A: B (C)", "A/B/C" and "A (B) C"
+    all reduce to the same three segments. The record's own dash is never
+    at risk of being caught up in this: RECORD_RE (with its own
+    digit-adjacency guard) is matched first, and only the text on either
+    side of *that* match is split, never the record itself.
+
+    None if the line has no record at all.
     """
-    match = _PAREN_WRAP_RE.match(remainder)
+    match = RECORD_RE.search(line)
     if not match:
         return None
-    prefix, interior = match.group(1).strip(), match.group(2).strip()
-    if not prefix or not any(c.isalpha() for c in interior):
-        return None
-    return prefix, interior
-
-
-def _delimiter_split(remainder: str) -> tuple[str, str] | None:
-    """Split on the first "," or " - " found. Order is preserved as-is; the
-    caller decides which chunk is the name and which is the deck."""
-    for delim in _DELIMITERS:
-        if delim in remainder:
-            part_a, part_b = remainder.split(delim, 1)
-            return part_a.strip(), part_b.strip()
-    return None
+    before = _SEGMENT_SPLIT_RE.split(line[: match.start()])
+    after = _SEGMENT_SPLIT_RE.split(line[match.end() :])
+    return [s.strip() for s in before + after if s.strip()]
 
 
 def _line_chunks(line: str) -> tuple[str, str] | None:
-    """The two raw chunks flanking a line's record, in on-the-page order -
-    from a parenthetical wrapper or a delimiter, whichever matches. None for
-    a line with no record, or no recognizable two-chunk shape (a
-    delimiter-less line falls back to a token-based name search instead -
-    see _split_name_deck).
+    """The name and deck segments flanking a line's record, in on-the-page
+    order - only when the line splits *cleanly* into exactly two non-record
+    segments. Any other count means the delimiters weren't unambiguous (no
+    delimiter at all, or a name/deck's own incidental punctuation added an
+    extra split) - see _split_name_deck's token-based fallback for that case.
     """
-    remainder = _line_remainder(line)
-    if remainder is None:
+    segments = _line_segments(line)
+    if segments is None or len(segments) != 2:
         return None
-    return _paren_split(remainder) or _delimiter_split(remainder)
+    return segments[0], segments[1]
 
 
 def _order_evidence(
@@ -136,21 +121,27 @@ def _report_order_is_swapped(message: str, name_registry: NameRegistry, deck_reg
 def _split_name_deck(line: str, name_registry: NameRegistry, swapped: bool) -> tuple[str, str]:
     """Split a line's name/deck text into (raw_name, raw_deck).
 
-    `swapped` says whether this report's field order puts the deck first
-    (paren case: "Deck (Name)"; delimiter case: "Deck - Name") rather than
-    the default "Name (Deck)"/"Name - Deck" - decided once for the whole
-    report by _report_order_is_swapped, not re-judged per line.
+    `swapped` says whether this report's field order puts the deck segment
+    first rather than the name segment - decided once for the whole report
+    by _report_order_is_swapped, not re-judged per line.
     """
-    remainder = _line_remainder(line) or ""
-    chunks = _paren_split(remainder) or _delimiter_split(remainder)
+    chunks = _line_chunks(line)
     if chunks is not None:
         part_a, part_b = chunks
         return (part_b, part_a) if swapped else (part_a, part_b)
 
-    # No delimiter or parens at all: try the longest known-name prefix
-    # first, so a multi-word name ("Gareth S") isn't chopped into
-    # name="Gareth", deck="S ...".
-    tokens = remainder.split()
+    # Not a clean two-segment split (no delimiters at all, or more than two
+    # segments once a name/deck's own incidental punctuation is accounted
+    # for - e.g. "dimir control/terror(?)" or "Mono-White Heroic"): fall
+    # back to the longest known-name prefix, so a multi-word name
+    # ("Gareth S") isn't chopped into name="Gareth", deck="S ...".
+    remainder = _line_remainder(line) or ""
+    # A leftover delimiter (e.g. the "-" between "Gareth" and "dimir
+    # control/terror(?)") can survive as its own whitespace-separated token
+    # once _line_chunks has declined to split this line - drop anything
+    # that's pure punctuation, since a real name/deck token always has at
+    # least one letter or digit in it.
+    tokens = [t for t in remainder.split() if any(c.isalnum() for c in t)]
     if not tokens:
         return "", ""
     for n in range(len(tokens), 0, -1):
@@ -158,6 +149,44 @@ def _split_name_deck(line: str, name_registry: NameRegistry, swapped: bool) -> t
         if name_registry.lookup(candidate) is not None:
             return candidate, " ".join(tokens[n:]).strip()
     return tokens[0], " ".join(tokens[1:]).strip()
+
+
+def _line_has_known_name_and_deck(line: str, name_registry: NameRegistry, deck_registry: DeckRegistry) -> bool:
+    """Whether this line's name/deck split turns up a recognizable player
+    AND a recognizable deck, in either field order. Used to tell a genuine
+    meta-report result apart from a line that's merely record-shaped - e.g.
+    a round-by-round trophy post ("2-0 vs UB Terror") has no player name on
+    the line at all, and shouldn't be mistaken for one.
+    """
+    for swapped in (False, True):
+        raw_name, raw_deck = _split_name_deck(line, name_registry, swapped)
+        if raw_name and raw_deck and name_registry.lookup(raw_name) and deck_registry.lookup(raw_deck):
+            return True
+    return False
+
+
+def is_meta_report(
+    message: str,
+    name_registry: NameRegistry,
+    deck_registry: DeckRegistry,
+    min_results: int = 2,
+) -> bool:
+    """Heuristic: a real meta-report message has multiple lines that are
+    both record-shaped AND identifiably a known player's known deck - not
+    just any line that happens to contain a "W-L" pattern. Falls back to
+    the plain record-count check when either registry is still empty (e.g.
+    the very first sync ever, with nothing yet to cross-check against).
+    """
+    lines = message.splitlines()
+    if not name_registry.entries or not deck_registry.entries:
+        return sum(1 for line in lines if RECORD_RE.search(line)) >= min_results
+
+    hits = sum(
+        1
+        for line in lines
+        if RECORD_RE.search(line) and _line_has_known_name_and_deck(line, name_registry, deck_registry)
+    )
+    return hits >= min_results
 
 
 def parse_result_line(

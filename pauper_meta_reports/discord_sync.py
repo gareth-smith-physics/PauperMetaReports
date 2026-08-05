@@ -95,7 +95,7 @@ def run_sync(default_lgs: str | None = None) -> None:
                     # Not `continue`-ing here on purpose: a message can announce a
                     # new LGS *and* contain that week's results in the same post.
 
-                if not is_meta_report(message.content):
+                if not is_meta_report(message.content, name_registry, deck_registry):
                     continue
 
                 report_date = message.created_at.date()

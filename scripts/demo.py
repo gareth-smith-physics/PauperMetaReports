@@ -69,7 +69,7 @@ def main() -> None:
     event = "Dummy LGS"
 
     for i, message in enumerate(messages):
-        if not is_meta_report(message):
+        if not is_meta_report(message, name_registry, deck_registry):
             print(f"--- message {i}: not a meta report, skipping ---")
             continue
 

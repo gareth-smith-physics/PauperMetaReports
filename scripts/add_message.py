@@ -49,8 +49,8 @@ def main() -> None:
         if lgs_registry.add_canonical(new_lgs):
             print(f"Registered new LGS: {new_lgs}")
 
-    if not is_meta_report(message):
-        print("This doesn't look like a meta report (fewer than 2 record-shaped lines) - nothing added.")
+    if not is_meta_report(message, name_registry, deck_registry):
+        print("This doesn't look like a meta report - nothing added.")
         return
 
     found_event = find_lgs_in_message(message, lgs_registry)
