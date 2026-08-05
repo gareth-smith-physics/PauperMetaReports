@@ -83,7 +83,11 @@ def run_sync(default_lgs: str | None = None) -> None:
 
             print(f"Scanning #{channel} for meta reports posted after {after.date()}...")
             new_reports = 0
-            async for message in channel.history(after=after, oldest_first=True):
+            # limit=None is required - discord.py's default (100) silently
+            # truncates a channel with more than 100 messages since `after`,
+            # which is almost every real channel once chatter is mixed in
+            # with the actual report posts.
+            async for message in channel.history(after=after, oldest_first=True, limit=None):
                 new_lgs = parse_new_lgs_announcement(message.content)
                 if new_lgs is not None:
                     if lgs_registry.add_canonical(new_lgs):

@@ -2,6 +2,7 @@
 settings.json
 .streamlit/secrets.toml
 data/*.json
+data/*.txt
 __pycache__/
 *.pyc
 .venv/

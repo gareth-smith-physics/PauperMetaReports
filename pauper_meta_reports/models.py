@@ -211,6 +211,34 @@ class History:
                     collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return updated
 
+    def rename_event(self, old_event: str, new_event: str) -> int:
+        """Retroactively rename a venue across every past report that used
+        it, regardless of date - used after correcting an LGS's canonical
+        name in the registry, so history stays consistent with the registry
+        instead of pointing at a name that no longer exists there.
+
+        Same _id-is-derived-from-date+event caveat as backfill_event: each
+        matching report has to be deleted under its old _id and reinserted
+        under the new one, or the old document would be left behind as an
+        orphaned duplicate.
+
+        Returns how many reports were updated.
+        """
+        collection = getattr(self, "_collection", None)
+        updated = 0
+        for report in self.reports:
+            if report.event == old_event:
+                old_id = f"{report.date.isoformat()}::{report.event}"
+                report.event = new_event
+                for result in report.results:
+                    result.event = new_event
+                if collection is not None:
+                    collection.delete_one({"_id": old_id})
+                    doc = _report_doc(report)
+                    collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+                updated += 1
+        return updated
+
     def rename_deck(self, old_deck: str, new_deck: str) -> int:
         """Retroactively rename a deck across every past result - used after
         correcting a deck's canonical name in the registry, so history stays
