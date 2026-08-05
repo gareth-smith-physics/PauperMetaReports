@@ -459,14 +459,19 @@ def deck_win_rate_evolution_figure(evo_df: pd.DataFrame, edges: list, deck: str)
     band_color = "rgba(57, 135, 229, 0.25)"
     last_edge = edges[-1]
 
-    # Step-shaped, closed out to the final boundary - same convention as the
-    # meta share evolution chart, so a bin's value holds flat across its full width.
-    x = list(evo_df["date"]) + [last_edge]
-    win_rate = list(evo_df["win_rate"]) + [evo_df["win_rate"].iloc[-1]]
-    ci_lower = list(evo_df["ci_lower"]) + [evo_df["ci_lower"].iloc[-1]]
-    ci_upper = list(evo_df["ci_upper"]) + [evo_df["ci_upper"].iloc[-1]]
-    wins = list(evo_df["wins"]) + [evo_df["wins"].iloc[-1]]
-    matches = list(evo_df["matches"]) + [evo_df["matches"].iloc[-1]]
+    # Drop empty bins entirely rather than leaving them as NaN placeholders,
+    # so the line bridges straight across a gap instead of breaking there -
+    # dropped identically from win_rate/ci_lower/ci_upper so the band stays
+    # aligned with the line at every remaining point, including the bridged
+    # stretch. Closed out to the final boundary using the last *real* bin's
+    # value, same convention as the meta share evolution chart.
+    real = evo_df[evo_df["win_rate"].notna()]
+    x = list(real["date"]) + [last_edge]
+    win_rate = list(real["win_rate"]) + [real["win_rate"].iloc[-1]]
+    ci_lower = list(real["ci_lower"]) + [real["ci_lower"].iloc[-1]]
+    ci_upper = list(real["ci_upper"]) + [real["ci_upper"].iloc[-1]]
+    wins = list(real["wins"]) + [real["wins"].iloc[-1]]
+    matches = list(real["matches"]) + [real["matches"].iloc[-1]]
 
     fig = go.Figure()
 
@@ -513,6 +518,19 @@ def deck_win_rate_evolution_figure(evo_df: pd.DataFrame, edges: list, deck: str)
                 "%{customdata[0]:.0f} wins / %{customdata[1]:.0f} matches<br>"
                 "CI: %{customdata[2]:.0%}-%{customdata[3]:.0%}<extra></extra>"
             ),
+        )
+    )
+    # Markers only at genuine data points - not the synthetic closing point
+    # used above to hold the line flat out to the final edge, which would
+    # otherwise show a dot past the last week that actually has results.
+    fig.add_trace(
+        go.Scatter(
+            x=list(real["date"]),
+            y=list(real["win_rate"]),
+            mode="markers",
+            marker=dict(size=7, color=line_color),
+            hoverinfo="skip",  # the line trace above already owns the tooltip
+            showlegend=False,
         )
     )
 
