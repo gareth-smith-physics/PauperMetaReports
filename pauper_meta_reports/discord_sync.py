@@ -39,9 +39,9 @@ def run_sync(default_lgs: str | None = None) -> None:
     the results aren't lost, and separately queued for someone to confirm or
     correct the real venue.
 
-    `default_lgs`, if given, overrides settings.json's DEFAULT_LGS - useful
-    for the very first local run, before any LGS has been registered and
-    every message would otherwise need a venue guess.
+    `default_lgs`, if given, is used whenever a message doesn't mention any
+    known LGS - needed for the very first run, before any LGS has been
+    registered and every message would otherwise need a venue guess.
     """
     load_dotenv()
     token = os.getenv("DISCORD_TOKEN")
@@ -50,15 +50,8 @@ def run_sync(default_lgs: str | None = None) -> None:
 
     settings = load_settings()
     channel_id = settings["CHANNEL_ID"]
-    # Used only when a meta-report message doesn't mention any known LGS by
-    # name - e.g. before the first "New LGS: ..." announcement has ever been
-    # posted. Once the registry has entries, most messages should resolve to
-    # a real LGS via find_lgs_in_message() instead of falling back to this.
-    default_lgs = default_lgs or settings.get("DEFAULT_LGS")
     if not default_lgs:
-        raise RuntimeError(
-            "No default LGS available - pass --default-lgs, or set DEFAULT_LGS in settings.json."
-        )
+        raise RuntimeError("No default LGS available - pass --default-lgs.")
     start_date = datetime.fromisoformat(settings["START_DATE"]).replace(tzinfo=timezone.utc)
 
     name_registry = NameRegistry()

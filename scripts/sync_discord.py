@@ -14,9 +14,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--default-lgs",
         help=(
-            "Fallback LGS name for messages that don't mention a known store, "
-            "overriding settings.json's DEFAULT_LGS. Handy for the very first "
-            "local run, before any LGS has been registered."
+            "Fallback LGS name for messages that don't mention a known store. "
+            "Needed for the very first run, before any LGS has been registered."
         ),
     )
     args = parser.parse_args()
