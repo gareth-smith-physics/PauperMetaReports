@@ -1,0 +1,30 @@
+name: Discord meta report sync
+
+on:
+  schedule:
+    # 09:00 UTC daily - adjust to whatever time suits (cron is always UTC).
+    - cron: "0 9 * * *"
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run Discord sync
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_USERNAME: ${{ secrets.MONGODB_USERNAME }}
+          MONGODB_PASSWORD: ${{ secrets.MONGODB_PASSWORD }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          START_DATE: ${{ vars.START_DATE }}
+          DEFAULT_LGS: ${{ vars.DEFAULT_LGS }}
+        run: python scripts/sync_discord.py

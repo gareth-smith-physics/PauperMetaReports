@@ -19,11 +19,20 @@ SETTINGS_PATH = ROOT / "settings.json"
 
 
 def load_settings() -> dict:
-    if not SETTINGS_PATH.exists():
+    if SETTINGS_PATH.exists():
+        return json.loads(SETTINGS_PATH.read_text())
+    # settings.json is gitignored (like .env) so it won't exist in a fresh
+    # CI checkout - fall back to the same two keys as environment variables
+    # (e.g. GitHub Actions repository variables) instead of requiring a file.
+    channel_id = os.getenv("CHANNEL_ID")
+    start_date = os.getenv("START_DATE")
+    if not channel_id or not start_date:
         raise FileNotFoundError(
-            f"{SETTINGS_PATH} not found - copy settings.example.json to settings.json and fill it in."
+            f"{SETTINGS_PATH} not found, and CHANNEL_ID/START_DATE aren't set as environment "
+            "variables either - copy settings.example.json to settings.json and fill it in, "
+            "or set CHANNEL_ID/START_DATE as env vars."
         )
-    return json.loads(SETTINGS_PATH.read_text())
+    return {"CHANNEL_ID": int(channel_id), "START_DATE": start_date}
 
 
 def run_sync(default_lgs: str | None = None) -> None:
@@ -50,8 +59,9 @@ def run_sync(default_lgs: str | None = None) -> None:
 
     settings = load_settings()
     channel_id = settings["CHANNEL_ID"]
+    default_lgs = default_lgs or os.getenv("DEFAULT_LGS")
     if not default_lgs:
-        raise RuntimeError("No default LGS available - pass --default-lgs.")
+        raise RuntimeError("No default LGS available - pass --default-lgs, or set a DEFAULT_LGS env var.")
     start_date = datetime.fromisoformat(settings["START_DATE"]).replace(tzinfo=timezone.utc)
 
     name_registry = NameRegistry()
@@ -72,8 +82,16 @@ def run_sync(default_lgs: str | None = None) -> None:
     intents.message_content = True
     bot = commands.Bot(command_prefix="!unused-meta-reports-sync", intents=intents)
 
+    # discord.py's default error handler catches anything raised inside an
+    # event like on_ready, logs it, and moves on - it does NOT propagate to
+    # bot.run(), so the script would otherwise exit 0 even after a failed
+    # sync. Capture it here and re-raise once bot.run() returns, so a real
+    # failure actually fails the process (and, in CI, the workflow run).
+    sync_error: BaseException | None = None
+
     @bot.event
     async def on_ready() -> None:
+        nonlocal sync_error
         try:
             print(f"Logged in as {bot.user}")
             channel = bot.get_channel(channel_id)
@@ -121,10 +139,16 @@ def run_sync(default_lgs: str | None = None) -> None:
                     print(f"  {report_date}: recorded {len(report)} result(s)")
 
             print(f"Done. {new_reports} new meta report(s) recorded.")
+        except Exception as exc:
+            sync_error = exc
+            raise
         finally:
             await bot.close()
 
     bot.run(token)
+
+    if sync_error is not None:
+        raise sync_error
 
 
 if __name__ == "__main__":
