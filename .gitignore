@@ -3,6 +3,7 @@ settings.json
 .streamlit/secrets.toml
 data/*.json
 data/*.txt
+data/*.csv
 __pycache__/
 *.pyc
 .venv/
