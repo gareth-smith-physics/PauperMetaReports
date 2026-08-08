@@ -11,7 +11,12 @@ from .db import get_collection
 # Wins/losses/draws each 0-9 (a single digit) - wide enough for any
 # realistically-sized Swiss event (e.g. "4-0" from a 4-round event with an
 # undefeated record), not just the 3-round-cap events seen in early data.
-RECORD_RE = re.compile(r"(?<!\d)([0-9])-([0-9])(?:-([0-9]))?(?!\d)")
+# The separator is "-" or plain whitespace ("3 0" as well as "3-0") - safe
+# to be this loose because is_meta_report() no longer just checks for a
+# record-shaped line, it cross-checks against the name/deck registries too,
+# so a stray "digit space digit" elsewhere in ordinary chat isn't enough on
+# its own to make a message look like a meta report.
+RECORD_RE = re.compile(r"(?<!\d)([0-9])[-\s]+([0-9])(?:[-\s]+([0-9]))?(?!\d)")
 
 
 @dataclass(frozen=True)
